@@ -16,6 +16,7 @@ class User(Base):
     profile_picture = Column(String, nullable=True)  # ✅ new field
     created_at = Column(DateTime, default=datetime.utcnow)  # ✅ NEW
     is_verified = Column(Boolean, default=False)
+    verification_token = Column(String, nullable=True)
 
     files = relationship("File", back_populates="owner")
     logs = relationship("AuditLog", back_populates="user")
@@ -40,3 +41,10 @@ class AuditLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
 
     user = relationship("User", back_populates="logs")
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token = Column(String, unique=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)

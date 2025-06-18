@@ -1,24 +1,29 @@
-from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Body
-from sqlalchemy.orm import Session
-from passlib.context import CryptContext
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
-from pydantic import BaseModel
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import uuid
+import smtplib
+from email.message import EmailMessage
+from datetime import datetime, timedelta
+from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Body
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from sqlalchemy.orm import Session
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from pydantic import BaseModel
+from fastapi.responses import RedirectResponse
 
 from app import models, schemas, database
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# ───────────── JWT config ─────────────
+# ───── JWT Config ─────
 SECRET_KEY = "supersecretkey"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# ───────────── DB dependency ──────────
+# ───── DB Dependency ─────
 def get_db():
     db = database.SessionLocal()
     try:
@@ -26,11 +31,11 @@ def get_db():
     finally:
         db.close()
 
-# ───────────── password utils ─────────
+# ───── Password Utils ─────
 def hash_password(p: str): return pwd_context.hash(p)
 def verify_password(p: str, h: str): return pwd_context.verify(p, h)
 
-# ───────────── token helpers ──────────
+# ───── Token Helpers ─────
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
@@ -39,7 +44,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-# ───────────── current user helper ────
+# ───── Get Current User ─────
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> models.User:
     cred_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -60,39 +65,82 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise cred_exc
     return user
 
-# ───────────── register ───────────────
+# ───── Email Sender ─────
+def send_verification_email(to_email: str, token: str):
+    from_email = os.environ.get('EMAIL_FROM')
+    password = os.environ.get('EMAIL_PASSWORD')
+
+    if not from_email or not password:
+        raise RuntimeError("Missing EMAIL_FROM or EMAIL_PASSWORD in environment variables")
+
+    verification_link = f"http://localhost:8000/verify-email?token={token}"
+    msg = EmailMessage()
+    msg['Subject'] = 'Verify Your Email'
+    msg['From'] = from_email
+    msg['To'] = to_email
+    msg.set_content(f"Please verify your email by clicking the following link:\n\n{verification_link}")
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(from_email, password)
+            smtp.send_message(msg)
+            print("✅ Verification email sent successfully!")
+    except Exception as e:
+        print("❌ Email sending error:", e)
+        raise HTTPException(500, detail="Failed to send verification email")
+
+
+# ───── Register ─────
 @router.post("/register", response_model=schemas.UserOut)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     if db.query(models.User).filter(models.User.email == user.email).first():
         raise HTTPException(400, "Email already registered")
 
+    token = str(uuid.uuid4())
     new_user = models.User(
         email=user.email,
         hashed_password=hash_password(user.password),
         full_name=user.full_name,
-        role="user"
+        role="user",
+        verification_token=token
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    send_verification_email(user.email, token)
     return new_user
 
-# ───────────── login ───────────────────
+# ───── Verify Email ─────
+@router.get("/verify-email")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.verification_token == token).first()
+    if not user:
+        return RedirectResponse(url="http://localhost:3000/verified?success=false")
+
+    user.is_verified = True
+    user.verification_token = None
+    db.commit()
+    return RedirectResponse(url="http://localhost:3000/verified?success=true")
+
+# ───── Login ─────
 @router.post("/login", response_model=schemas.Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(401, "Invalid credentials")
+    #if not user.is_verified:
+       # raise HTTPException(403, "Email not verified")
 
     access_token = create_access_token(data={"sub": user.email, "role": user.role})
     return {"access_token": access_token, "token_type": "bearer"}
 
-# ───────────── /me ─────────────────────
+# ───── Account Info ─────
 @router.get("/me", response_model=schemas.UserOut)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
-# ───────────── /me/profile-picture ─────
+# ───── Upload Avatar ─────
 @router.patch("/me/profile-picture", response_model=schemas.UserOut)
 def upload_profile_picture(
     file: UploadFile = File(...),
@@ -105,7 +153,6 @@ def upload_profile_picture(
 
     avatar_id = f"{uuid.uuid4().hex}{ext}"
     avatar_path = os.path.join("static", "avatars", avatar_id)
-
     os.makedirs(os.path.dirname(avatar_path), exist_ok=True)
 
     with open(avatar_path, "wb") as f:
@@ -116,7 +163,7 @@ def upload_profile_picture(
     db.refresh(user)
     return user
 
-# ───────────── update full name ────────
+# ───── Update Name ─────
 class FullNameUpdate(BaseModel):
     full_name: str
 
@@ -131,13 +178,43 @@ def update_full_name(
     db.refresh(user)
     return user
 
-# ───────────── admin guard ─────────────
+# ───── Delete Own Account ─────
+class PasswordInput(BaseModel):
+    password: str
+
+@router.delete("/me", status_code=204)
+def delete_own_account(
+    data: PasswordInput,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    if not verify_password(data.password, current_user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    db.delete(current_user)
+    db.commit()
+
+# ───── Change Password ─────
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+@router.patch("/me/password", status_code=204)
+def change_password(
+    data: PasswordChange,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user)
+):
+    if not verify_password(data.current_password, user.hashed_password):
+        raise HTTPException(400, "Incorrect current password")
+    user.hashed_password = hash_password(data.new_password)
+    db.commit()
+# ───────────── Admin Guard ─────────────
 def get_admin_user(current_user: models.User = Depends(get_current_user)):
     if current_user.role != "admin":
         raise HTTPException(403, "Admin access required")
     return current_user
 
-# ───────────── admin user ops ──────────
+# ───────────── Admin User Ops ──────────
 @router.get("/admin/users", response_model=list[schemas.UserOut])
 def get_all_users(db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
     return db.query(models.User).all()
@@ -164,35 +241,3 @@ def update_user_role(user_id: int, update: RoleUpdate, db: Session = Depends(get
     db.commit()
     db.refresh(user)
     return user
-
-# ───────────── delete own account ────────
-class PasswordInput(BaseModel):
-    password: str
-
-@router.delete("/me", status_code=204)
-def delete_own_account(
-    data: PasswordInput,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    if not verify_password(data.password, current_user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect password")
-    db.delete(current_user)
-    db.commit()
-
-# ───────────── change password ────────────
-class PasswordChange(BaseModel):
-    current_password: str
-    new_password: str
-
-@router.patch("/me/password", status_code=204)
-def change_password(
-    data: PasswordChange,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user)
-):
-    if not verify_password(data.current_password, user.hashed_password):
-        raise HTTPException(400, "Incorrect current password")
-
-    user.hashed_password = hash_password(data.new_password)
-    db.commit()

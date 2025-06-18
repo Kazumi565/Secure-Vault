@@ -1,27 +1,29 @@
+# app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app import auth, upload, models
-from app.database import engine
 from fastapi.staticfiles import StaticFiles
+from app import auth, upload, password_reset, models
+from app.database import engine
 
-# Create tables
+app = FastAPI()
 models.Base.metadata.create_all(bind=engine)
 
-# ✅ Create the FastAPI app
-app = FastAPI()
+# 👇 add every host/port you actually use locally
+DEV_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",       # vite
+]
 
-# ✅ Add CORS middleware after app is defined
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
+    allow_origins=DEV_ORIGINS,     # or ["*"] while developing
+    allow_credentials=True,        # keeps Authorization header
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ Correct static mount
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# ✅ Include routers
 app.include_router(auth.router)
+app.include_router(password_reset.router)
 app.include_router(upload.router)
