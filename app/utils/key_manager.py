@@ -22,7 +22,8 @@ def _require_data_key_strategy() -> Tuple[str | None, str | None]:
     if master_key:
         return None, master_key
     raise RuntimeError(
-        "Either KMS_KEY_ID (preferred) or MASTER_KEY must be configured for encryption"
+        "Either KMS_KEY_ID (preferred) or MASTER_KEY must be "
+        "configured for encryption"
     )
 
 
@@ -37,12 +38,15 @@ def generate_encrypted_data_key() -> Tuple[bytes, str]:
 
     if kms_key_id:
         try:
-            response = _kms_client().generate_data_key(KeyId=kms_key_id, KeySpec="AES_256")
+            response = _kms_client().generate_data_key(
+                KeyId=kms_key_id, KeySpec="AES_256"
+            )
         except (ClientError, BotoCoreError) as exc:
             logger.error("Failed to generate KMS data key: %s", exc)
             raise
         plaintext_key = response["Plaintext"]
-        ciphertext = base64.b64encode(response["CiphertextBlob"]).decode("utf-8")
+        ciphertext = base64.b64encode(
+            response["CiphertextBlob"]).decode("utf-8")
         return plaintext_key, ciphertext
 
     fernet = Fernet(master_key.encode())
@@ -73,7 +77,9 @@ def decrypt_data_key(encrypted_data_key: str) -> bytes:
             fernet = Fernet(master_key.encode())
             return fernet.decrypt(data)
         except InvalidToken as exc:
-            logger.error("Invalid Fernet token for encrypted data key: %s", exc)
+            logger.error(
+                "Invalid Fernet token for encrypted data key: %s", exc)
             raise RuntimeError("Encrypted key could not be decrypted") from exc
 
-    raise RuntimeError("MASTER_KEY or KMS_KEY_ID must be configured to decrypt data keys")
+    raise RuntimeError(
+        "MASTER_KEY or KMS_KEY_ID must be configured to decrypt data keys")

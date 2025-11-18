@@ -8,6 +8,7 @@ class UserCreate(BaseModel):
     password: str
     full_name: Optional[str] = None
 
+
 class UserOut(BaseModel):
     id: int
     email: EmailStr
@@ -20,9 +21,11 @@ class UserOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class Token(BaseModel):
     access_token: str
     token_type: str
+
 
 class TokenData(BaseModel):
     email: str | None = None

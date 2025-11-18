@@ -3,8 +3,13 @@ import uuid
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, BackgroundTasks
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from fastapi import (
+    APIRouter, HTTPException, Depends, status,
+    UploadFile, File, BackgroundTasks
+)
+from fastapi.security import (
+    OAuth2PasswordRequestForm, OAuth2PasswordBearer
+)
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -27,6 +32,8 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # ───── DB Dependency ─────
+
+
 def get_db():
     db = database.SessionLocal()
     try:
@@ -35,20 +42,29 @@ def get_db():
         db.close()
 
 # ───── Password Utils ─────
+
+
 def hash_password(p: str): return pwd_context.hash(p)
 def verify_password(p: str, h: str): return pwd_context.verify(p, h)
 
 # ───── Token Helpers ─────
+
+
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 # ───── Get Current User ─────
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> models.User:
+
+
+def get_current_user(
+        token: str = Depends(oauth2_scheme),
+        db: Session = Depends(get_db)) -> models.User:
     cred_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -63,12 +79,16 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     except JWTError:
         raise cred_exc
 
-    user = db.query(models.User).filter(models.User.email == token_data.email).first()
+    user = db.query(
+        models.User).filter(
+        models.User.email == token_data.email).first()
     if user is None:
         raise cred_exc
     return user
 
 # ───── Register ─────
+
+
 @router.post("/register", response_model=schemas.UserOut)
 def register(
     user: schemas.UserCreate,
@@ -94,11 +114,16 @@ def register(
     return new_user
 
 # ───── Verify Email ─────
+
+
 @router.get("/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.verification_token == token).first()
+    user = db.query(
+        models.User).filter(
+        models.User.verification_token == token).first()
     if not user:
-        return RedirectResponse(url="http://localhost:3000/verified?success=false")
+        return RedirectResponse(
+            url="http://localhost:3000/verified?success=false")
 
     user.is_verified = True
     user.verification_token = None
@@ -106,23 +131,36 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     return RedirectResponse(url="http://localhost:3000/verified?success=true")
 
 # ───── Login ─────
-@router.post("/login", response_model=schemas.Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(401, "Invalid credentials")
-    #if not user.is_verified:
-       # raise HTTPException(403, "Email not verified")
 
-    access_token = create_access_token(data={"sub": user.email, "role": user.role})
+
+@router.post("/login", response_model=schemas.Token)
+def login(
+        form_data: OAuth2PasswordRequestForm = Depends(),
+        db: Session = Depends(get_db)):
+    user = db.query(
+        models.User).filter(
+        models.User.email == form_data.username).first()
+    if not user or not verify_password(
+            form_data.password,
+            user.hashed_password):
+        raise HTTPException(401, "Invalid credentials")
+    # if not user.is_verified:
+    #     raise HTTPException(403, "Email not verified")
+
+    access_token = create_access_token(
+        data={"sub": user.email, "role": user.role})
     return {"access_token": access_token, "token_type": "bearer"}
 
 # ───── Account Info ─────
+
+
 @router.get("/me", response_model=schemas.UserOut)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
 # ───── Upload Avatar ─────
+
+
 @router.patch("/me/profile-picture", response_model=schemas.UserOut)
 def upload_profile_picture(
     file: UploadFile = File(...),
@@ -146,8 +184,11 @@ def upload_profile_picture(
     return user
 
 # ───── Update Name ─────
+
+
 class FullNameUpdate(BaseModel):
     full_name: str
+
 
 @router.patch("/me/full-name", response_model=schemas.UserOut)
 def update_full_name(
@@ -161,8 +202,11 @@ def update_full_name(
     return user
 
 # ───── Delete Own Account ─────
+
+
 class PasswordInput(BaseModel):
     password: str
+
 
 @router.delete("/me", status_code=204)
 def delete_own_account(
@@ -176,9 +220,12 @@ def delete_own_account(
     db.commit()
 
 # ───── Change Password ─────
+
+
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str
+
 
 @router.patch("/me/password", status_code=204)
 def change_password(
@@ -191,29 +238,42 @@ def change_password(
     user.hashed_password = hash_password(data.new_password)
     db.commit()
 # ───────────── Admin Guard ─────────────
+
+
 def get_admin_user(current_user: models.User = Depends(get_current_user)):
     if current_user.role != "admin":
         raise HTTPException(403, "Admin access required")
     return current_user
 
 # ───────────── Admin User Ops ──────────
+
+
 @router.get("/admin/users", response_model=list[schemas.UserOut])
-def get_all_users(db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
+def get_all_users(db: Session = Depends(get_db),
+                  admin: models.User = Depends(get_admin_user)):
     return db.query(models.User).all()
 
+
 @router.delete("/admin/users/{user_id}", status_code=204)
-def delete_user(user_id: int, db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
+def delete_user(user_id: int, db: Session = Depends(get_db),
+                admin: models.User = Depends(get_admin_user)):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(404, "User not found")
     db.delete(user)
     db.commit()
 
+
 class RoleUpdate(BaseModel):
     role: str
 
+
 @router.patch("/admin/users/{user_id}/role", response_model=schemas.UserOut)
-def update_user_role(user_id: int, update: RoleUpdate, db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
+def update_user_role(
+        user_id: int,
+        update: RoleUpdate,
+        db: Session = Depends(get_db),
+        admin: models.User = Depends(get_admin_user)):
     if update.role not in ("admin", "user"):
         raise HTTPException(400, "Invalid role")
     user = db.query(models.User).filter(models.User.id == user_id).first()

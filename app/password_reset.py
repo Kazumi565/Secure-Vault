@@ -14,13 +14,18 @@ router = APIRouter()
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
 
 # ✅ Input model for forgot password
+
+
 class EmailInput(BaseModel):
     email: str
 
 # ✅ Input model for reset password
+
+
 class ResetPasswordInput(BaseModel):
     token: str
     new_password: str
+
 
 @router.post("/forgot-password")
 def forgot_password(
@@ -32,21 +37,30 @@ def forgot_password(
     if user:
         token = str(uuid.uuid4())
         expires = datetime.utcnow() + timedelta(hours=1)
-        db_token = PasswordResetToken(user_id=user.id, token=token, expires_at=expires)
+        db_token = PasswordResetToken(
+            user_id=user.id, token=token, expires_at=expires)
         db.add(db_token)
         db.commit()
 
-        reset_link = f"{FRONTEND_BASE_URL.rstrip('/')}/reset-password?token={token}"
+        reset_link = (
+            f"{FRONTEND_BASE_URL.rstrip('/')}"
+            f"/reset-password?token={token}"
+        )
         send_password_reset_email(user.email, reset_link, background_tasks)
 
-    return {"message": "If this email is registered, you will receive a reset link."}
+    return {
+        "message": "If this email is registered, "
+                   "you will receive a reset link."
+    }
+
 
 @router.post("/reset-password")
 def reset_password(
     data: ResetPasswordInput,
     db: Session = Depends(get_db)
 ):
-    record = db.query(PasswordResetToken).filter(PasswordResetToken.token == data.token).first()
+    record = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token == data.token).first()
     if not record or record.expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired token")
 
@@ -56,7 +70,9 @@ def reset_password(
 
     # ✅ Prevent resetting to the same password
     if verify_password(data.new_password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="New password must be different from the old one")
+        raise HTTPException(
+            status_code=400,
+            detail="New password must be different from the old one")
 
     user.hashed_password = hash_password(data.new_password)
     db.delete(record)

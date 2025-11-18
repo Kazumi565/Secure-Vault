@@ -25,6 +25,7 @@ s3 = boto3.client(
     endpoint_url=S3_ENDPOINT_URL,
 )
 
+
 def upload_to_s3(key: str, data: bytes, user_id: int):
     """
     Upload encrypted data to S3 under user-specific path
@@ -32,6 +33,7 @@ def upload_to_s3(key: str, data: bytes, user_id: int):
     full_key = f"{user_id}/{key}"
     s3.put_object(Bucket=S3_BUCKET_NAME, Key=full_key, Body=data)
     logger.info("Uploaded %s to S3", full_key)
+
 
 def download_from_s3(key: str, user_id: int) -> bytes:
     """
@@ -41,6 +43,7 @@ def download_from_s3(key: str, user_id: int) -> bytes:
     response = s3.get_object(Bucket=S3_BUCKET_NAME, Key=full_key)
     return response['Body'].read()
 
+
 def delete_from_s3(key: str, user_id: int):
     """
     Delete a specific object from S3 under user-specific path
@@ -48,6 +51,7 @@ def delete_from_s3(key: str, user_id: int):
     full_key = f"{user_id}/{key}"
     s3.delete_object(Bucket=S3_BUCKET_NAME, Key=full_key)
     logger.info("Deleted %s from S3", full_key)
+
 
 def get_file_size_s3(key: str) -> int:
     """
