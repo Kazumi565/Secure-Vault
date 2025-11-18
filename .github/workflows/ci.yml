@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master", "work"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      TESTING: "1"
+      DATABASE_URL: sqlite:///./test.db
+      SECRET_KEY: super-secret-ci-key
+      MASTER_KEY: jkK-Z84yGOu4X6LXHRa_i_zKBi1fFEA3PBvz_3-X7X8=
+      EMAIL_FROM: ci@example.com
+      EMAIL_PROVIDER: console
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+      AWS_REGION: us-east-1
+      S3_BUCKET_NAME: securevault-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - name: Install Python dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+      - name: Ruff
+        run: ruff check .
+      - name: Flake8
+        run: flake8 app
+      - name: Bandit
+        run: bandit -r app -x app/tests
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
+      - name: Pytest
+        run: pytest

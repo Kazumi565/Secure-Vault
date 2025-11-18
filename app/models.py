@@ -1,9 +1,7 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
-from sqlalchemy import Column, Integer, String, DateTime, Boolean
-from datetime import datetime
 
 class User(Base):
     __tablename__ = "users"
@@ -23,7 +21,7 @@ class User(Base):
 
 class File(Base):
     __tablename__ = "files"
-    encryption_key = Column(String, nullable=False)
+    encrypted_data_key = Column(Text, nullable=False)
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, nullable=False)
     stored_filename = Column(String, unique=True, nullable=False)

@@ -1,17 +1,34 @@
 # app/tests/conftest.py
-import os, uuid, importlib
-import boto3, pytest
-from moto import mock_aws
-from fastapi.testclient import TestClient
+import importlib
+import os
+import secrets
+import uuid
 
-from app.main     import app
-from app          import models
+import boto3
+import pytest
+from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
+from moto import mock_aws
+
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("SECRET_KEY", secrets.token_urlsafe(32))
+os.environ.setdefault("MASTER_KEY", Fernet.generate_key().decode())
+os.environ.setdefault("EMAIL_FROM", "noreply@example.com")
+os.environ.setdefault("EMAIL_PROVIDER", "console")
+os.environ.setdefault("AWS_REGION", "eu-north-1")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+os.environ.setdefault("S3_BUCKET_NAME", "securevault-tests")
+
+from app.main import app
+from app import models
 from app.database import engine
-from app.auth     import get_admin_user   # we’ll override this
+from app.auth import get_admin_user   # we’ll override this
 
 # ───────────────────────────────  constants  ──────────────────────────────
 AWS_REGION        = "eu-north-1"
-BUCKET_NAME       = "securevault-bucket-mihai"   # ← same as in s3_utils
+BUCKET_NAME       = os.getenv("S3_BUCKET_NAME", "securevault-tests")
 
 # ───────────────────────── create fresh DB once ───────────────────────────
 @pytest.fixture(scope="session", autouse=True)
