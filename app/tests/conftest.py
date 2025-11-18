@@ -1,18 +1,8 @@
 # app/tests/conftest.py
-from app.auth import get_admin_user   # we’ll override this
-from app.database import engine
-from app import models
-from app.main import app
-import importlib
+# ──────────── Set test environment BEFORE any app imports ────────────
 import os
 import secrets
-import uuid
-
-import boto3
-import pytest
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
-from moto import mock_aws
 
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
@@ -24,6 +14,19 @@ os.environ.setdefault("AWS_REGION", "eu-north-1")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
 os.environ.setdefault("S3_BUCKET_NAME", "securevault-tests")
+
+# ──────────── Now safe to import app modules ────────────
+from app.auth import get_admin_user   # we'll override this  # noqa: E402
+from app.database import engine  # noqa: E402
+from app import models  # noqa: E402
+from app.main import app  # noqa: E402
+import importlib  # noqa: E402
+import uuid  # noqa: E402
+
+import boto3  # noqa: E402
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from moto import mock_aws  # noqa: E402
 
 
 # ───────────────────────────────  constants  ──────────────────────────────

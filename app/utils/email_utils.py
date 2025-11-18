@@ -113,7 +113,8 @@ def send_verification_email(
         to_email: str,
         token: str,
         background_tasks: Optional[BackgroundTasks] = None) -> None:
-    link = f"http://localhost:8000/verify-email?token={token}"
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
+    link = f"{frontend_base.rstrip('/')}/verify?token={token}"
     subject = "Verify Your SecureVault Account"
     body = (
         "Please verify your email by clicking the following link:"

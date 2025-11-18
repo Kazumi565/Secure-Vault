@@ -14,7 +14,11 @@ Secure Vault is a FastAPI-powered encrypted file storage API that demonstrates p
    ./scripts/generate_secret.sh >> .env
    ```
    Replace placeholders such as `DATABASE_URL`, SMTP credentials, and AWS access keys as needed.
-3. **Run the API**
+3. **Run database migrations** (if using a persistent database)
+   ```bash
+   cd app && alembic upgrade head
+   ```
+4. **Run the API**
    ```bash
    uvicorn app.main:app --reload
    ```
@@ -57,10 +61,22 @@ Set `EMAIL_PROVIDER` to one of:
 * `sendgrid` – supply `SENDGRID_API_KEY`.
 * `console` – useful for local development/tests; logs outbound messages.
 
-Verification links point to the FastAPI `/verify-email` endpoint, while password reset links respect `FRONTEND_BASE_URL` so you can direct users to your UI.
+Verification and password reset links both use `FRONTEND_BASE_URL` (defaults to `http://localhost:3000`) to direct users to your frontend application.
+
+## Health checks
+The `/healthz` endpoint returns a 200 status when the database and S3 storage are accessible, or a 503 if either dependency is unavailable. Use this for readiness probes in container orchestration platforms.
 
 ## Threat model summary
 * **Confidentiality** – Compromise of the relational database does not expose AES keys thanks to envelope encryption.
 * **Integrity** – AES-EAX provides authenticated encryption for each object; tampering is detected before returning files.
 * **Availability** – Email is dispatched asynchronously to avoid blocking auth workflows; Docker Compose provides an easy way to recreate the stack.
 * **Operational hygiene** – CI guards against dependency vulnerabilities and obvious security smells.
+
+## Known security findings
+The automated security scanners (Bandit and pip-audit) flag the following items:
+
+1. **Bandit B413** – Flags imports from `Crypto` (pycryptodome). This is a false positive; we use `pycryptodome`, the actively maintained fork of the deprecated `pycrypto` library. The library is safe and widely used.
+
+2. **GHSA-wj6h-64fc-37mp in ecdsa 0.19.1** – A timing attack vulnerability in the ecdsa library (transitive dependency via python-jose for JWT handling). The project maintainers consider timing attacks out of scope, and there is no planned fix. Risk is low for typical usage patterns where an attacker cannot control signature operations or measure timing with sufficient precision.
+
+Both findings have been reviewed and are considered acceptable for the current threat model.

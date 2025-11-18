@@ -118,17 +118,19 @@ def register(
 
 @router.get("/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
     user = db.query(
         models.User).filter(
         models.User.verification_token == token).first()
     if not user:
         return RedirectResponse(
-            url="http://localhost:3000/verified?success=false")
+            url=f"{frontend_base.rstrip('/')}/verified?success=false")
 
     user.is_verified = True
     user.verification_token = None
     db.commit()
-    return RedirectResponse(url="http://localhost:3000/verified?success=true")
+    return RedirectResponse(
+        url=f"{frontend_base.rstrip('/')}/verified?success=true")
 
 # ───── Login ─────
 
