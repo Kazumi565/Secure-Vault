@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Body, Depends
+import os
+
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.models import User, PasswordResetToken
@@ -9,6 +11,7 @@ from pydantic import BaseModel
 import uuid
 
 router = APIRouter()
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
 
 # ✅ Input model for forgot password
 class EmailInput(BaseModel):
@@ -20,7 +23,11 @@ class ResetPasswordInput(BaseModel):
     new_password: str
 
 @router.post("/forgot-password")
-def forgot_password(data: EmailInput, db: Session = Depends(get_db)):
+def forgot_password(
+    data: EmailInput,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     user = db.query(User).filter(User.email == data.email).first()
     if user:
         token = str(uuid.uuid4())
@@ -29,8 +36,8 @@ def forgot_password(data: EmailInput, db: Session = Depends(get_db)):
         db.add(db_token)
         db.commit()
 
-        reset_link = f"http://localhost:3000/reset-password?token={token}"
-        send_password_reset_email(user.email, reset_link)
+        reset_link = f"{FRONTEND_BASE_URL.rstrip('/')}/reset-password?token={token}"
+        send_password_reset_email(user.email, reset_link, background_tasks)
 
     return {"message": "If this email is registered, you will receive a reset link."}
 

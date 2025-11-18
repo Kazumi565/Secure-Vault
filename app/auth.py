@@ -1,11 +1,9 @@
-from dotenv import load_dotenv
-load_dotenv()
 import os
 import uuid
-import smtplib
-from email.message import EmailMessage
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Body
+
+from dotenv import load_dotenv
+from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
@@ -14,12 +12,17 @@ from pydantic import BaseModel
 from fastapi.responses import RedirectResponse
 
 from app import models, schemas, database
+from app.utils.email_utils import send_verification_email
+
+load_dotenv()
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ───── JWT Config ─────
-SECRET_KEY = "supersecretkey"
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -65,34 +68,13 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise cred_exc
     return user
 
-# ───── Email Sender ─────
-def send_verification_email(to_email: str, token: str):
-    from_email = os.environ.get('EMAIL_FROM')
-    password = os.environ.get('EMAIL_PASSWORD')
-
-    if not from_email or not password:
-        raise RuntimeError("Missing EMAIL_FROM or EMAIL_PASSWORD in environment variables")
-
-    verification_link = f"http://localhost:8000/verify-email?token={token}"
-    msg = EmailMessage()
-    msg['Subject'] = 'Verify Your Email'
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg.set_content(f"Please verify your email by clicking the following link:\n\n{verification_link}")
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(from_email, password)
-            smtp.send_message(msg)
-            print("✅ Verification email sent successfully!")
-    except Exception as e:
-        print("❌ Email sending error:", e)
-        raise HTTPException(500, detail="Failed to send verification email")
-
-
 # ───── Register ─────
 @router.post("/register", response_model=schemas.UserOut)
-def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def register(
+    user: schemas.UserCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     if db.query(models.User).filter(models.User.email == user.email).first():
         raise HTTPException(400, "Email already registered")
 
@@ -108,7 +90,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    send_verification_email(user.email, token)
+    send_verification_email(user.email, token, background_tasks)
     return new_user
 
 # ───── Verify Email ─────
