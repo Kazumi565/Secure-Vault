@@ -26,18 +26,15 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 MAX_STORAGE_BYTES = 100 * 1024 * 1024  # 100 MB / user
 
-
 def _encrypt(data: bytes, key: bytes) -> bytes:
     cipher = AES.new(key, AES.MODE_EAX)
     ciphertext, tag = cipher.encrypt_and_digest(data)
     return cipher.nonce + tag + ciphertext  # 16 nonce + 16 tag + payload
 
-
 def _decrypt(blob: bytes, key: bytes) -> bytes:
     nonce, tag, ciphertext = blob[:16], blob[16:32], blob[32:]
     cipher = AES.new(key, AES.MODE_EAX, nonce)
     return cipher.decrypt_and_verify(ciphertext, tag)
-
 
 def _db():
     db = SessionLocal()
@@ -46,7 +43,6 @@ def _db():
     finally:
         db.close()
 
-
 def _hr(num_bytes: int) -> str:
     value = float(num_bytes)
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -54,7 +50,6 @@ def _hr(num_bytes: int) -> str:
             return f"{value:.1f} {unit}"
         value /= 1024
     return f"{value:.1f} PB"
-
 
 def _used(user_id: int, db: Session) -> int:
     total = 0
@@ -66,7 +61,6 @@ def _used(user_id: int, db: Session) -> int:
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("Could not determine size for %s: %s", key, exc)
     return total
-
 
 @router.post("/upload")
 async def upload_file(
@@ -105,7 +99,6 @@ async def upload_file(
     db.commit()
     db.refresh(record)
     return {"file_id": record.id, "message": "File uploaded."}
-
 
 @router.get("/files")
 def list_files(
@@ -152,7 +145,6 @@ def list_files(
         files.sort(key=lambda item: item["uploaded_at"], reverse=reverse)
     return files
 
-
 @router.get("/download/{file_id}")
 def download_file(
     file_id: int,
@@ -175,8 +167,7 @@ def download_file(
         if not inline:
             db.add(
                 AuditLog(
-                    action=f"Downloaded file: {
-                        record.filename}",
+                    action=f"Downloaded file: {record.filename}",
                     user_id=current_user.id))
             db.commit()
     except Exception as exc:
@@ -196,7 +187,6 @@ def download_file(
         },
     )
 
-
 @router.delete("/files/{file_id}", status_code=204)
 def delete_file(
     file_id: int,
@@ -215,11 +205,9 @@ def delete_file(
     db.delete(record)
     db.add(
         AuditLog(
-            action=f"Deleted file: {
-                record.filename}",
+            action=f"Deleted file: {record.filename}",
             user_id=current_user.id))
     db.commit()
-
 
 @router.get("/storage-usage")
 def storage_usage(
@@ -227,7 +215,6 @@ def storage_usage(
     db: Session = Depends(_db),
 ):
     return {"used_mb": round(_used(current_user.id, db) / 1_048_576, 2)}
-
 
 @router.get("/admin/audit")
 def audit(
@@ -250,7 +237,6 @@ def audit(
             "action": log_entry.action,
         } for log_entry in logs
     ]
-
 
 @router.get("/admin/audit/export")
 def export_audit(
@@ -284,7 +270,6 @@ def export_audit(
         },
     )
 
-
 @router.get("/admin/files")
 def admin_list_files(
     db: Session = Depends(_db),
@@ -300,7 +285,6 @@ def admin_list_files(
         }
         for record in rows
     ]
-
 
 @router.delete("/admin/files/{file_id}")
 def admin_delete_file(
@@ -323,8 +307,7 @@ def admin_delete_file(
     db.delete(record)
     db.add(
         AuditLog(
-            action=f"ADMIN deleted {
-                record.filename}",
+            action=f"ADMIN deleted {record.filename}",
             user_id=admin.id))
     db.commit()
 
