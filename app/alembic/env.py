@@ -1,3 +1,4 @@
+from app.models import Base
 import os
 import sys
 from logging.config import fileConfig
@@ -6,8 +7,6 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from app.models import Base
 
 
 # this is the Alembic Config object, which provides

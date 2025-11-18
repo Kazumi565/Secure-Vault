@@ -15,8 +15,12 @@ from Crypto.Cipher import AES
 from app.database import SessionLocal
 from app.models import File as FileModel, User, AuditLog
 from app.auth import get_current_user, get_admin_user
-from app.utils.s3_utils import upload_to_s3, download_from_s3, delete_from_s3, get_file_size_s3
-from app.utils.key_manager import generate_encrypted_data_key, decrypt_data_key
+from app.utils.s3_utils import (
+    upload_to_s3, download_from_s3, delete_from_s3, get_file_size_s3
+)
+from app.utils.key_manager import (
+    generate_encrypted_data_key, decrypt_data_key
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -73,7 +77,8 @@ async def upload_file(
     raw_bytes = await upload_file.read()
     used = _used(current_user.id, db)
     if used + len(raw_bytes) > MAX_STORAGE_BYTES:
-        raise HTTPException(status_code=400, detail="Storage limit exceeded (100 MB)")
+        raise HTTPException(status_code=400,
+                            detail="Storage limit exceeded (100 MB)")
 
     aes_key, encrypted_data_key = generate_encrypted_data_key()
     blob = _encrypt(raw_bytes, aes_key)
@@ -139,7 +144,10 @@ def list_files(
     if sort_by == "name":
         files.sort(key=lambda item: item["filename"].lower(), reverse=reverse)
     elif sort_by == "size":
-        files.sort(key=lambda item: float(item["size"].split()[0]), reverse=reverse)
+        files.sort(
+            key=lambda item: float(
+                item["size"].split()[0]),
+            reverse=reverse)
     else:
         files.sort(key=lambda item: item["uploaded_at"], reverse=reverse)
     return files
@@ -166,19 +174,26 @@ def download_file(
         data = _decrypt(blob, data_key)
         if not inline:
             db.add(
-                AuditLog(action=f"Downloaded file: {record.filename}", user_id=current_user.id)
-            )
+                AuditLog(
+                    action=f"Downloaded file: {
+                        record.filename}",
+                    user_id=current_user.id))
             db.commit()
     except Exception as exc:
         logger.error("Failed to decrypt file %s: %s", record.id, exc)
-        raise HTTPException(status_code=500, detail="Decryption failed") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="Decryption failed") from exc
 
     mime, _ = mimetypes.guess_type(record.filename)
     disposition = "inline" if inline else "attachment"
     return StreamingResponse(
         BytesIO(data),
         media_type=mime or "application/octet-stream",
-        headers={"Content-Disposition": f'{disposition}; filename="{record.filename}"'},
+        headers={
+            "Content-Disposition":
+                f'{disposition}; filename="{record.filename}"'
+        },
     )
 
 
@@ -198,7 +213,11 @@ def delete_file(
 
     delete_from_s3(record.stored_filename, current_user.id)
     db.delete(record)
-    db.add(AuditLog(action=f"Deleted file: {record.filename}", user_id=current_user.id))
+    db.add(
+        AuditLog(
+            action=f"Deleted file: {
+                record.filename}",
+            user_id=current_user.id))
     db.commit()
 
 
@@ -224,10 +243,12 @@ def audit(
     return [
         {
             "timestamp": log_entry.timestamp,
-            "user": log_entry.user.email if log_entry.user else "(deleted user)",
+            "user": (
+                log_entry.user.email
+                if log_entry.user else "(deleted user)"
+            ),
             "action": log_entry.action,
-        }
-        for log_entry in logs
+        } for log_entry in logs
     ]
 
 
@@ -257,7 +278,10 @@ def export_audit(
     return StreamingResponse(
         byte_buffer,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="audit-{today}.csv"'},
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="audit-{today}.csv"'
+        },
     )
 
 
@@ -293,10 +317,15 @@ def admin_delete_file(
     except ClientError as exc:
         code = exc.response["Error"].get("Code")
         if code not in {"NoSuchKey", "404", "NotFound"}:
-            raise HTTPException(status_code=502, detail=f"S3 delete failed: {code}") from exc
+            raise HTTPException(status_code=502,
+                                detail=f"S3 delete failed: {code}") from exc
 
     db.delete(record)
-    db.add(AuditLog(action=f"ADMIN deleted {record.filename}", user_id=admin.id))
+    db.add(
+        AuditLog(
+            action=f"ADMIN deleted {
+                record.filename}",
+            user_id=admin.id))
     db.commit()
 
     return {"status": "ok", "message": f"{record.filename} purged"}

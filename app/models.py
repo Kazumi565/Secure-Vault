@@ -1,7 +1,11 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Boolean
+from sqlalchemy import (
+    Column, Integer, String, ForeignKey,
+    DateTime, Text, Boolean
+)
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
+
 
 class User(Base):
     __tablename__ = "users"
@@ -19,6 +23,7 @@ class User(Base):
     files = relationship("File", back_populates="owner")
     logs = relationship("AuditLog", back_populates="user")
 
+
 class File(Base):
     __tablename__ = "files"
     encrypted_data_key = Column(Text, nullable=False)
@@ -30,6 +35,7 @@ class File(Base):
 
     owner = relationship("User", back_populates="files")
 
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -39,6 +45,8 @@ class AuditLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
 
     user = relationship("User", back_populates="logs")
+
+
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
 
