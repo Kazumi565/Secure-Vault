@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1
+httpx2==2.13.1
+moto==5.2.3
+ruff==0.16.10
+pip-audit==2.10.1

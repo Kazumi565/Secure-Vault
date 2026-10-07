@@ -1,0 +1,15 @@
+.git
+.env*
+.venv
+venv
+__pycache__
+.pytest_cache
+.ruff_cache
+data
+*.db*
+frontend
+frontend_backup
+encrypted_files
+static
+tests
+docs
