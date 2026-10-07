@@ -1,243 +1,416 @@
-from dotenv import load_dotenv
-load_dotenv()
-import os
-import uuid
-import smtplib
-from email.message import EmailMessage
-from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Body
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from sqlalchemy.orm import Session
-from passlib.context import CryptContext
-from jose import JWTError, jwt
-from pydantic import BaseModel
-from fastapi.responses import RedirectResponse
+import io
+import secrets
+from datetime import UTC, datetime, timedelta
 
-from app import models, schemas, database
+import pyotp
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, Response, UploadFile
+from PIL import Image, ImageOps, UnidentifiedImageError
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 
-router = APIRouter()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from app.dependencies import current_session, current_user, db_session, rate_limit, record, user_json
+from app.mail import enqueue, flush_mail
+from app.models import Account, ActionToken, FileVersion, LoginSession, StorageGarbage, VaultFile, now
+from app.security import digest, hash_password, random_token, verify_password
 
-# ───── JWT Config ─────
-SECRET_KEY = "supersecretkey"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-# ───── DB Dependency ─────
-def get_db():
-    db = database.SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# ───── Password Utils ─────
-def hash_password(p: str): return pwd_context.hash(p)
-def verify_password(p: str, h: str): return pwd_context.verify(p, h)
-
-# ───── Token Helpers ─────
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
-# ───── Get Current User ─────
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> models.User:
-    cred_exc = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise cred_exc
-        token_data = schemas.TokenData(email=email)
-    except JWTError:
-        raise cred_exc
-
-    user = db.query(models.User).filter(models.User.email == token_data.email).first()
-    if user is None:
-        raise cred_exc
-    return user
-
-# ───── Email Sender ─────
-def send_verification_email(to_email: str, token: str):
-    from_email = os.environ.get('EMAIL_FROM')
-    password = os.environ.get('EMAIL_PASSWORD')
-
-    if not from_email or not password:
-        raise RuntimeError("Missing EMAIL_FROM or EMAIL_PASSWORD in environment variables")
-
-    verification_link = f"http://localhost:8000/verify-email?token={token}"
-    msg = EmailMessage()
-    msg['Subject'] = 'Verify Your Email'
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg.set_content(f"Please verify your email by clicking the following link:\n\n{verification_link}")
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(from_email, password)
-            smtp.send_message(msg)
-            print("✅ Verification email sent successfully!")
-    except Exception as e:
-        print("❌ Email sending error:", e)
-        raise HTTPException(500, detail="Failed to send verification email")
+router = APIRouter(prefix="/auth", tags=["Accounts"])
 
 
-# ───── Register ─────
-@router.post("/register", response_model=schemas.UserOut)
-def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    if db.query(models.User).filter(models.User.email == user.email).first():
-        raise HTTPException(400, "Email already registered")
+class EmailInput(BaseModel):
+    email: EmailStr
 
-    token = str(uuid.uuid4())
-    new_user = models.User(
-        email=user.email,
-        hashed_password=hash_password(user.password),
-        full_name=user.full_name,
-        role="user",
-        verification_token=token
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
 
-    send_verification_email(user.email, token)
-    return new_user
+class RegisterInput(EmailInput):
+    password: str = Field(min_length=12, max_length=128)
+    full_name: str = Field(default="", max_length=120)
 
-# ───── Verify Email ─────
-@router.get("/verify-email")
-def verify_email(token: str, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.verification_token == token).first()
-    if not user:
-        return RedirectResponse(url="http://localhost:3000/verified?success=false")
 
-    user.is_verified = True
-    user.verification_token = None
-    db.commit()
-    return RedirectResponse(url="http://localhost:3000/verified?success=true")
+class LoginInput(EmailInput):
+    password: str = Field(min_length=1, max_length=128)
+    code: str = Field(default="", max_length=32)
 
-# ───── Login ─────
-@router.post("/login", response_model=schemas.Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(401, "Invalid credentials")
-    #if not user.is_verified:
-       # raise HTTPException(403, "Email not verified")
 
-    access_token = create_access_token(data={"sub": user.email, "role": user.role})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-# ───── Account Info ─────
-@router.get("/me", response_model=schemas.UserOut)
-def read_users_me(current_user: models.User = Depends(get_current_user)):
-    return current_user
-
-# ───── Upload Avatar ─────
-@router.patch("/me/profile-picture", response_model=schemas.UserOut)
-def upload_profile_picture(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user)
-):
-    ext = os.path.splitext(file.filename)[-1]
-    if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
-        raise HTTPException(400, "Unsupported file type")
-
-    avatar_id = f"{uuid.uuid4().hex}{ext}"
-    avatar_path = os.path.join("static", "avatars", avatar_id)
-    os.makedirs(os.path.dirname(avatar_path), exist_ok=True)
-
-    with open(avatar_path, "wb") as f:
-        f.write(file.file.read())
-
-    user.profile_picture = f"/static/avatars/{avatar_id}"
-    db.commit()
-    db.refresh(user)
-    return user
-
-# ───── Update Name ─────
-class FullNameUpdate(BaseModel):
-    full_name: str
-
-@router.patch("/me/full-name", response_model=schemas.UserOut)
-def update_full_name(
-    update: FullNameUpdate,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user)
-):
-    user.full_name = update.full_name
-    db.commit()
-    db.refresh(user)
-    return user
-
-# ───── Delete Own Account ─────
 class PasswordInput(BaseModel):
-    password: str
+    password: str = Field(min_length=1, max_length=128)
+    code: str = Field(default="", max_length=32)
 
-@router.delete("/me", status_code=204)
-def delete_own_account(
-    data: PasswordInput,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    if not verify_password(data.password, current_user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect password")
-    db.delete(current_user)
+
+class ResetInput(BaseModel):
+    token: str = Field(min_length=20, max_length=100)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class ChangePassword(PasswordInput):
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class ProfileInput(BaseModel):
+    full_name: str = Field(max_length=120)
+
+    @field_validator("full_name")
+    @classmethod
+    def clean_name(cls, value):
+        return value.strip()
+
+
+class CodeInput(BaseModel):
+    code: str = Field(min_length=6, max_length=32)
+
+
+def issue_action(db, request, user, purpose):
+    db.execute(delete(ActionToken).where(ActionToken.user_id == user.id, ActionToken.purpose == purpose))
+    token = random_token()
+    expiry = timedelta(hours=24 if purpose == "verify" else 1)
+    db.add(ActionToken(user_id=user.id, purpose=purpose, token_hash=digest(token), expires_at=now() + expiry))
+    route = "verify" if purpose == "verify" else "reset-password"
+    link = f"{request.app.state.settings.frontend_url.rstrip('/')}/{route}?token={token}"
+    enqueue(
+        db,
+        request.app,
+        user.email,
+        "Verify your email" if purpose == "verify" else "Reset your password",
+        f"Open this link to continue:\n{link}\n\nIgnore this message if you did not request it.",
+    )
+
+
+def check_factor(db, app, user, code):
+    if not user.totp_secret:
+        return True
+    hashes = list(user.recovery_codes or [])
+    candidate = digest(code.strip())
+    if candidate in hashes:
+        hashes.remove(candidate)
+        # Account row is locked by the caller for concurrent recovery-code safety.
+        user.recovery_codes = hashes
+        return True
+    totp = pyotp.TOTP(app.state.crypto.unwrap(user.totp_secret).decode())
+    step = int(datetime.now(UTC).timestamp()) // 30
+    for offset in [-1, 0, 1]:
+        matched = step + offset
+        if matched > user.last_totp_step and secrets.compare_digest(totp.at(matched * 30), code.strip()):
+            result = db.execute(
+                update(Account)
+                .where(Account.id == user.id, Account.last_totp_step < matched)
+                .values(last_totp_step=matched)
+            )
+            return result.rowcount == 1
+    return False
+
+
+def locked_user(db, user_id):
+    # A write first serializes SQLite too; PostgreSQL locks the account row.
+    db.execute(update(Account).where(Account.id == user_id).values(used_bytes=Account.used_bytes))
+    return db.scalar(
+        select(Account).where(Account.id == user_id).with_for_update().execution_options(populate_existing=True)
+    )
+
+
+def require_password(db, request, user, data):
+    if not verify_password(data.password, user.hashed_password) or not check_factor(db, request.app, user, data.code):
+        raise HTTPException(400, "Incorrect password or authentication code")
+
+
+@router.post("/register", status_code=201)
+def register(data: RegisterInput, request: Request, background: BackgroundTasks, db=Depends(db_session)):
+    rate_limit(request, "register", limit=5, seconds=3600)
+    email = str(data.email).casefold()
+    user = Account(email=email, hashed_password=hash_password(data.password), full_name=data.full_name.strip())
+    db.add(user)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "An account with this email already exists") from None
+    issue_action(db, request, user, "verify")
+    record(db, user, "account.created")
     db.commit()
+    background.add_task(flush_mail, request.app)
+    return {"message": "Account created. Check your email to verify it."}
 
-# ───── Change Password ─────
-class PasswordChange(BaseModel):
-    current_password: str
-    new_password: str
 
-@router.patch("/me/password", status_code=204)
-def change_password(
-    data: PasswordChange,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user)
-):
-    if not verify_password(data.current_password, user.hashed_password):
-        raise HTTPException(400, "Incorrect current password")
+@router.post("/login")
+def login(data: LoginInput, request: Request, response: Response, background: BackgroundTasks, db=Depends(db_session)):
+    rate_limit(request, "login", str(data.email), limit=request.app.state.settings.login_limit)
+    user = db.scalar(select(Account).where(Account.email == str(data.email).casefold()))
+    valid = verify_password(data.password, user.hashed_password if user else request.app.state.dummy_hash)
+    if not user or not valid:
+        raise HTTPException(401, "Incorrect email, password, or authentication code")
+    checked_hash = user.hashed_password
+    user = locked_user(db, user.id)
+    # A password reset may have completed while this request waited for the lock.
+    if not user or user.hashed_password != checked_hash:
+        raise HTTPException(401, "Incorrect email, password, or authentication code")
+    if not check_factor(db, request.app, user, data.code):
+        raise HTTPException(401, "Incorrect email, password, or authentication code")
+    if user.hashed_password.startswith("$2"):
+        user.hashed_password = hash_password(data.password)
+    raw = random_token()
+    settings = request.app.state.settings
+    session = LoginSession(
+        token_hash=digest(raw),
+        csrf=random_token(),
+        user_id=user.id,
+        agent=request.headers.get("user-agent", "Unknown browser")[:200],
+        expires_at=now() + timedelta(hours=settings.session_hours),
+    )
+    db.add(session)
+    record(db, user, "session.created")
+    enqueue(
+        db,
+        request.app,
+        user.email,
+        "New sign-in to Secure Vault",
+        "A new session was created for your account. If this was not you, reset your password and review your sessions.",
+    )
+    db.commit()
+    response.set_cookie(
+        "vault_session",
+        raw,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        max_age=settings.session_hours * 3600,
+        path="/api",
+    )
+    background.add_task(flush_mail, request.app)
+    return {"user": user_json(user), "csrf_token": session.csrf}
+
+
+@router.get("/session")
+def session_info(user=Depends(current_user), session=Depends(current_session)):
+    return {"user": user_json(user), "csrf_token": session.csrf}
+
+
+@router.post("/logout", status_code=204)
+def logout(response: Response, session=Depends(current_session), db=Depends(db_session)):
+    db.delete(session)
+    db.commit()
+    response.delete_cookie("vault_session", path="/api")
+
+
+@router.post("/verify")
+def verify_email(data: dict, request: Request, db=Depends(db_session)):
+    rate_limit(request, "verify", limit=20)
+    token = data.get("token", "")
+    if not isinstance(token, str) or len(token) > 100:
+        raise HTTPException(400, "Invalid verification link")
+    row = db.scalar(
+        select(ActionToken).where(
+            ActionToken.token_hash == digest(token), ActionToken.purpose == "verify", ActionToken.expires_at > now()
+        )
+    )
+    if not row:
+        raise HTTPException(400, "Invalid or expired verification link")
+    user = db.get(Account, row.user_id)
+    user.verified = True
+    db.delete(row)
+    record(db, user, "account.verified")
+    db.commit()
+    return {"message": "Email verified. You can now use your vault."}
+
+
+@router.post("/resend-verification")
+def resend(request: Request, background: BackgroundTasks, user=Depends(current_user), db=Depends(db_session)):
+    rate_limit(request, "resend", user.email, limit=3, seconds=3600)
+    if not user.verified:
+        issue_action(db, request, user, "verify")
+        db.commit()
+        background.add_task(flush_mail, request.app)
+    return {"message": "A verification email has been queued."}
+
+
+@router.post("/forgot-password")
+def forgot(data: EmailInput, request: Request, background: BackgroundTasks, db=Depends(db_session)):
+    rate_limit(request, "forgot", str(data.email), limit=5, seconds=3600)
+    user = db.scalar(select(Account).where(Account.email == str(data.email).casefold()))
+    if user:
+        issue_action(db, request, user, "reset")
+        db.commit()
+        background.add_task(flush_mail, request.app)
+    return {"message": "If that account exists, a reset email has been queued."}
+
+
+@router.post("/reset-password")
+def reset(data: ResetInput, request: Request, db=Depends(db_session)):
+    rate_limit(request, "reset", limit=10)
+    row = db.scalar(
+        select(ActionToken).where(
+            ActionToken.token_hash == digest(data.token), ActionToken.purpose == "reset", ActionToken.expires_at > now()
+        )
+    )
+    if not row:
+        raise HTTPException(400, "Invalid or expired reset link")
+    user = locked_user(db, row.user_id)
+    # Claim exactly once, even when two requests submit the same token together.
+    claimed = db.execute(delete(ActionToken).where(ActionToken.id == row.id))
+    if claimed.rowcount != 1:
+        raise HTTPException(400, "Invalid or expired reset link")
     user.hashed_password = hash_password(data.new_password)
+    db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    record(db, user, "password.reset")
     db.commit()
-# ───────────── Admin Guard ─────────────
-def get_admin_user(current_user: models.User = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(403, "Admin access required")
-    return current_user
+    return {"message": "Password reset. Sign in again. Two-factor authentication remains enabled if configured."}
 
-# ───────────── Admin User Ops ──────────
-@router.get("/admin/users", response_model=list[schemas.UserOut])
-def get_all_users(db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
-    return db.query(models.User).all()
 
-@router.delete("/admin/users/{user_id}", status_code=204)
-def delete_user(user_id: int, db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(404, "User not found")
+@router.patch("/profile")
+def profile(data: ProfileInput, user=Depends(current_user), db=Depends(db_session)):
+    user.full_name = data.full_name
+    db.commit()
+    return user_json(user)
+
+
+@router.post("/password")
+def change_password(
+    data: ChangePassword, request: Request, response: Response, user=Depends(current_user), db=Depends(db_session)
+):
+    rate_limit(request, "sensitive", user.email, limit=10)
+    user = locked_user(db, user.id)
+    require_password(db, request, user, data)
+    user.hashed_password = hash_password(data.new_password)
+    db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    record(db, user, "password.changed")
+    db.commit()
+    response.delete_cookie("vault_session", path="/api")
+    return {"message": "Password changed. Sign in again on your devices."}
+
+
+@router.get("/sessions")
+def sessions(user=Depends(current_user), current=Depends(current_session), db=Depends(db_session)):
+    rows = db.scalars(
+        select(LoginSession)
+        .where(LoginSession.user_id == user.id, LoginSession.expires_at > now())
+        .order_by(LoginSession.created_at.desc())
+    ).all()
+    return [
+        {"id": s.id, "agent": s.agent, "current": s.id == current.id, "created_at": s.created_at.isoformat() + "Z"}
+        for s in rows
+    ]
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+def revoke(session_id: str, user=Depends(current_user), db=Depends(db_session)):
+    db.execute(delete(LoginSession).where(LoginSession.id == session_id, LoginSession.user_id == user.id))
+    record(db, user, "session.revoked")
+    db.commit()
+
+
+@router.post("/2fa/setup")
+def setup_factor(data: PasswordInput, request: Request, user=Depends(current_user), db=Depends(db_session)):
+    rate_limit(request, "sensitive", user.email, limit=10)
+    user = locked_user(db, user.id)
+    require_password(db, request, user, data)
+    if user.totp_secret:
+        raise HTTPException(409, "Two-factor authentication is already enabled")
+    secret = pyotp.random_base32()
+    user.pending_totp = request.app.state.crypto.wrap(secret.encode())
+    user.pending_totp_at = now()
+    db.commit()
+    return {"secret": secret, "uri": pyotp.TOTP(secret).provisioning_uri(user.email, issuer_name="Secure Vault")}
+
+
+@router.post("/2fa/enable")
+def enable_factor(
+    data: CodeInput,
+    request: Request,
+    user=Depends(current_user),
+    current=Depends(current_session),
+    db=Depends(db_session),
+):
+    rate_limit(request, "2fa", user.email, limit=10)
+    user = locked_user(db, user.id)
+    if not user.pending_totp or not user.pending_totp_at or user.pending_totp_at < now() - timedelta(minutes=10):
+        raise HTTPException(400, "Start two-factor setup again")
+    secret = request.app.state.crypto.unwrap(user.pending_totp).decode()
+    if not pyotp.TOTP(secret).verify(data.code, valid_window=1):
+        raise HTTPException(400, "Incorrect authentication code")
+    user.totp_secret = user.pending_totp
+    user.pending_totp = None
+    user.pending_totp_at = None
+    codes = [secrets.token_hex(8) for _ in range(8)]
+    user.recovery_codes = [digest(code) for code in codes]
+    user.last_totp_step = -1
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id, LoginSession.id != current.id))
+    record(db, user, "two_factor.enabled")
+    db.commit()
+    return {"recovery_codes": codes}
+
+
+@router.post("/2fa/disable")
+def disable_factor(data: PasswordInput, request: Request, user=Depends(current_user), db=Depends(db_session)):
+    rate_limit(request, "sensitive", user.email, limit=10)
+    user = locked_user(db, user.id)
+    require_password(db, request, user, data)
+    user.totp_secret = None
+    user.pending_totp = None
+    user.recovery_codes = []
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    record(db, user, "two_factor.disabled")
+    db.commit()
+    return {"message": "Two-factor authentication disabled. Sign in again."}
+
+
+@router.post("/avatar")
+def avatar(request: Request, file: UploadFile = File(...), user=Depends(current_user), db=Depends(db_session)):
+    raw = file.file.read(2 * 1024 * 1024 + 1)
+    if len(raw) > 2 * 1024 * 1024:
+        raise HTTPException(413, "Avatar must be smaller than 2 MiB")
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            if img.width * img.height > 16_000_000:
+                raise ValueError("Too many pixels")
+            img = ImageOps.fit(ImageOps.exif_transpose(img).convert("RGB"), (512, 512))
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=85)
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(400, "Choose a valid image smaller than 16 megapixels") from None
+    key = f"avatars/{user.id}/{secrets.token_hex(16)}.jpg"
+    with request.app.state.sessions.begin() as journal:
+        journal.add(StorageGarbage(key=key))
+    try:
+        user = locked_user(db, user.id)
+        request.app.state.storage.put(key, buf.getvalue())
+        old = user.avatar_key
+        user.avatar_key = key
+        if old:
+            db.merge(StorageGarbage(key=old))
+        db.execute(delete(StorageGarbage).where(StorageGarbage.key == key))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(503, "Avatar upload failed. Please retry.") from None
+    return {"message": "Avatar updated"}
+
+
+@router.get("/avatar")
+def get_avatar(request: Request, user=Depends(current_user)):
+    if not user.avatar_key:
+        raise HTTPException(404, "No avatar")
+    return Response(request.app.state.storage.get(user.avatar_key), media_type="image/jpeg")
+
+
+def delete_account_records(db, user, actor):
+    versions = db.scalars(select(FileVersion).join(VaultFile).where(VaultFile.owner_id == user.id)).all()
+    for version in versions:
+        db.merge(StorageGarbage(key=version.storage_key))
+    if user.avatar_key:
+        db.merge(StorageGarbage(key=user.avatar_key))
+    record(db, actor, "account.deleted", detail=f"Account ID {user.id}", owner_id=user.id)
+    db.flush()
     db.delete(user)
-    db.commit()
 
-class RoleUpdate(BaseModel):
-    role: str
 
-@router.patch("/admin/users/{user_id}/role", response_model=schemas.UserOut)
-def update_user_role(user_id: int, update: RoleUpdate, db: Session = Depends(get_db), admin: models.User = Depends(get_admin_user)):
-    if update.role not in ("admin", "user"):
-        raise HTTPException(400, "Invalid role")
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(404, "User not found")
-    user.role = update.role
+@router.delete("/account", status_code=204)
+def delete_account(
+    data: PasswordInput, request: Request, response: Response, user=Depends(current_user), db=Depends(db_session)
+):
+    rate_limit(request, "sensitive", user.email, limit=10)
+    user = locked_user(db, user.id)
+    require_password(db, request, user, data)
+    if user.role == "admin":
+        raise HTTPException(400, "Transfer administration and demote this account before deletion")
+    delete_account_records(db, user, user)
     db.commit()
-    db.refresh(user)
-    return user
+    response.delete_cookie("vault_session", path="/api")

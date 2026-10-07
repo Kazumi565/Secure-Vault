@@ -1,0 +1,38 @@
+# Local development only. Read docs/OPERATIONS.md before hosting publicly.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: secure_vault
+      POSTGRES_USER: vault
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/setup_dev.py first}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U vault -d secure_vault']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://vault:${POSTGRES_PASSWORD}@db/secure_vault
+      STORAGE_PATH: /app/data/objects
+      # Only the trusted web container reaches this unpublished API port.
+      FORWARDED_ALLOW_IPS: '*'
+    volumes:
+      - objects:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+  web:
+    build: ./frontend
+    ports:
+      - '127.0.0.1:3000:8080'
+    depends_on:
+      api:
+        condition: service_healthy
+volumes:
+  database:
+  objects:

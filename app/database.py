@@ -1,34 +1,25 @@
-import os
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-# Force this before loading .env so TESTING is read from the actual system env
-testing = os.getenv("TESTING") == "1"
 
-# Emergency hardcoded override
-if testing:
-    DATABASE_URL = "postgresql://postgres:testpass@localhost:5432/securevault_test"
-else:
-    from dotenv import load_dotenv
-    load_dotenv(".env")
-    DATABASE_URL = os.getenv("DATABASE_URL")
+class Base(DeclarativeBase):
+    pass
 
-# Confirm the connection string
-print("📦 TESTING =", testing)
-print("📦 DATABASE_URL =", DATABASE_URL)
 
-# 🔐 Final safety check
-if testing and "securevault_db" in DATABASE_URL:
-    raise RuntimeError("🚨 TESTING is enabled but using production DB — aborting!")
+def make_engine(url):
+    kwargs = {"pool_pre_ping": True}
+    if url.startswith("sqlite"):
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+    engine = create_engine(url, **kwargs)
+    if url.startswith("sqlite"):
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+        @event.listens_for(engine, "connect")
+        def configure_sqlite(connection, _):
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA busy_timeout=30000")
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+    return engine
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
+def session_factory(engine):
+    return sessionmaker(engine, expire_on_commit=False)
