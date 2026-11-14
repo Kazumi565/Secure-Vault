@@ -23,7 +23,8 @@ def current_session(request: Request, db=Depends(db_session)):
     if not session:
         raise HTTPException(401, "Sign in to continue")
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
-        if not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), session.csrf):
+        csrf = request.headers.get("X-CSRF-Token", "")
+        if not csrf.isascii() or not secrets.compare_digest(csrf, session.csrf):
             raise HTTPException(403, "Invalid request token. Reload the page and try again.")
     return session
 

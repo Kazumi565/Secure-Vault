@@ -10,12 +10,12 @@ Explore sample files, folders, versions, and trash without creating an account. 
 
 ## Features
 
-- **An organized workspace** — folders, tags, filename search, pagination, and sorting by actual file size.
-- **Uploads that keep you informed** — drag and drop, multiple files, progress, cancellation, and retry.
-- **Recoverable file management** — version history, version restoration, and a configurable trash retention period.
-- **Controlled sharing** — expiring download links, optional passwords, download limits, and immediate revocation.
+- **File organisation** — folders, tags, filename search, pagination, and sorting by actual file size.
+- **Uploads** — drag and drop, multiple files, progress, cancellation, and retry.
+- **Recovery** — version history, version restoration, and a configurable trash retention period.
+- **Sharing** — expiring download links, optional passwords, download limits, and immediate revocation.
 - **Account security** — email verification, Argon2 password hashing, authenticator-based two-factor authentication, recovery codes, and revocable browser sessions.
-- **Useful activity records** — personal history, administrator views, and CSV export. Administrative deletion targets a file ID rather than a filename.
+- **Activity records** — personal history, administrator views, and CSV export. Administrative deletion targets a file ID rather than a filename.
 - **A responsive interface** — light and dark themes, English and Romanian interface labels, keyboard-accessible dialogs, and mobile layouts.
 - **Flexible storage** — local encrypted objects for development or private Amazon S3 storage; SQLite or PostgreSQL for metadata.
 
@@ -89,6 +89,7 @@ From the backend repository:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check app tests migrations scripts
+.\.venv\Scripts\python.exe -m ruff format --check app tests migrations scripts
 .\.venv\Scripts\python.exe -m pip_audit -r requirements.txt
 ```
 
@@ -104,7 +105,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Browser tests start their own temporary backend and frontend on ports 8001 and 3001. They do not use the normal database. GitHub Actions includes SQLite, a dedicated PostgreSQL test service, frontend checks, and Chromium workflows. See [validation notes](docs/VALIDATION.md) for the checks actually run on this update and the remaining environment-specific checks.
+Browser tests start their own temporary backend and frontend on ports 8001 and 3001. They do not use the normal database. GitHub Actions includes SQLite, a dedicated PostgreSQL test service, frontend checks, and Chromium workflows. See [validation notes](docs/VALIDATION.md) for completed checks and those that still need a specific environment.
 
 ## Documentation
 

@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import tempfile
 import zipfile
+from contextlib import closing
 from pathlib import Path, PurePosixPath
 
 from sqlalchemy.engine import make_url
@@ -35,7 +36,10 @@ def backup(settings, output, *, stopped=False):
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="vault-backup-") as temporary:
         snapshot = Path(temporary) / "vault.db"
-        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as source, sqlite3.connect(snapshot) as target:
+        with (
+            closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as source,
+            closing(sqlite3.connect(snapshot)) as target,
+        ):
             source.backup(target)
             keys = {r[0] for r in target.execute("SELECT storage_key FROM file_versions")}
             keys.update(r[0] for r in target.execute("SELECT avatar_key FROM accounts WHERE avatar_key IS NOT NULL"))
@@ -102,7 +106,7 @@ def restore(archive_path, destination):
                 target.chmod(0o600)
                 if checksum(target) != metadata["sha256"]:
                     raise ValueError("Backup checksum mismatch")
-            with sqlite3.connect(destination / "vault.db") as connection:
+            with closing(sqlite3.connect(destination / "vault.db")) as connection:
                 if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise ValueError("Restored database failed its integrity check")
         except Exception:

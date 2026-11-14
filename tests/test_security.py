@@ -105,6 +105,23 @@ def test_totp_and_single_use_recovery_codes(app, user):
         assert result.json()["secret"] not in account.totp_secret
 
 
+def test_non_ascii_authentication_code_is_rejected_without_server_error(app, user):
+    setup = user.post("/api/auth/2fa/setup", json={"password": PASSWORD})
+    enabled = user.post("/api/auth/2fa/enable", json={"code": pyotp.TOTP(setup.json()["secret"]).now()})
+    recovery = enabled.json()["recovery_codes"][0]
+    fresh = TestClient(app)
+    data = {"email": "person@example.com", "password": PASSWORD}
+    for code in ["123\u00e956", "\uff11\uff12\uff13\uff14\uff15\uff16"]:
+        assert fresh.post("/api/auth/login", json=data | {"code": code}).status_code == 401
+    assert fresh.post("/api/auth/login", json=data | {"code": recovery}).status_code == 200
+
+
+def test_non_ascii_csrf_header_is_rejected_without_server_error(user):
+    result = user.patch("/api/auth/profile", json={"full_name": "Changed"}, headers={"X-CSRF-Token": b"\xff"})
+    assert result.status_code == 403
+    assert user.get("/api/auth/session").json()["user"]["full_name"] == "Test Person"
+
+
 def test_expired_session_rejected(app, user):
     with app.state.sessions.begin() as db:
         for session in db.scalars(select(LoginSession)):

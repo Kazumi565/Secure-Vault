@@ -77,18 +77,21 @@ def issue_action(db, request, user, purpose):
 def check_factor(db, app, user, code):
     if not user.totp_secret:
         return True
+    code = code.strip()
     hashes = list(user.recovery_codes or [])
-    candidate = digest(code.strip())
+    candidate = digest(code)
     if candidate in hashes:
         hashes.remove(candidate)
         # Account row is locked by the caller for concurrent recovery-code safety.
         user.recovery_codes = hashes
         return True
+    if len(code) != 6 or not code.isascii() or not code.isdecimal():
+        return False
     totp = pyotp.TOTP(app.state.crypto.unwrap(user.totp_secret).decode())
     step = int(datetime.now(UTC).timestamp()) // 30
     for offset in [-1, 0, 1]:
         matched = step + offset
-        if matched > user.last_totp_step and secrets.compare_digest(totp.at(matched * 30), code.strip()):
+        if matched > user.last_totp_step and secrets.compare_digest(totp.at(matched * 30), code):
             result = db.execute(
                 update(Account)
                 .where(Account.id == user.id, Account.last_totp_step < matched)
