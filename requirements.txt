@@ -12,5 +12,5 @@ email-validator==2.3.0
 boto3==1.43.108
 psycopg2-binary==2.9.13
 pyotp==2.10.0
-Pillow==12.3.0
+Pillow==13.0.0
 pycryptodome==3.24.0
