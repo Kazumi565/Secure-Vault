@@ -1,5 +1,7 @@
 # Secure Vault
 
+[![Checks](https://github.com/Kazumi565/Secure-Vault/actions/workflows/checks.yml/badge.svg)](https://github.com/Kazumi565/Secure-Vault/actions/workflows/checks.yml)
+
 A personal file workspace built with FastAPI and React. Organize files, keep earlier versions, recover deleted items, and control access with expiring links.
 
 **[Try the interactive demo](https://kazumi565.github.io/Secure-Vault-Frontend/)** · [Demo setup](https://github.com/Kazumi565/Secure-Vault-Frontend/blob/main/docs/DEMO.md)
@@ -7,6 +9,8 @@ A personal file workspace built with FastAPI and React. Organize files, keep ear
 Explore sample files, folders, versions, and trash without creating an account. Demo changes stay in tab memory and reset on refresh. Authentication, encryption, and sharing are simulated.
 
 ![Secure Vault desktop interface](docs/images/vault-desktop.png)
+
+[Run locally](#run-locally-on-windows) · [Architecture](#how-it-fits-together) · [Tests](#checks) · [Deployment and recovery](docs/OPERATIONS.md)
 
 ## Features
 
